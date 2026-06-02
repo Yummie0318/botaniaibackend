@@ -179,24 +179,19 @@ Rules:
     );
 
     // Save alternatives
-    if (Array.isArray(parsed.alternatives)) {
-      let rank = 2;
-      for (const alt of parsed.alternatives.slice(0, 2)) {
+if (Array.isArray(parsed.alternatives)) {
+      await Promise.all(parsed.alternatives.slice(0, 2).map((alt: any, i: number) => {
         const altType = validTypes.includes(alt.diagnosis_type) ? alt.diagnosis_type : "disease";
         const altConf = Math.min(1, Math.max(0, Number(alt.confidence) || 0.2));
-        await pool.query(
-          `
-          INSERT INTO scan_diagnoses (
+        return pool.query(
+          `INSERT INTO scan_diagnoses (
             scan_id, diagnosis_type, rank_order,
             confidence_score, diagnosis_name,
             symptoms_detected, structured_result
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
-          `,
-          [id, altType, rank, altConf, alt.diagnosis_name || "Alternative", alt.symptoms_detected || null, JSON.stringify(alt)]
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [id, altType, i + 2, altConf, alt.diagnosis_name || "Alternative", alt.symptoms_detected || null, JSON.stringify(alt)]
         );
-        rank++;
-      }
+      }));
     }
 
     // Update scan status

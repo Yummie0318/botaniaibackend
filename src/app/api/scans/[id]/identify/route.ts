@@ -239,18 +239,11 @@ async function findOrCreatePlantSpecies(input: {
   descriptionShort?: string | null;
   metadata?: Record<string, unknown>;
 }) {
-  const existing = await pool.query(
-    `SELECT id FROM plant_species WHERE LOWER(scientific_name) = LOWER($1) OR LOWER(common_name) = LOWER($2) LIMIT 1`,
-    [input.scientificName, input.commonName]
-  );
-  if (existing.rows.length > 0) return existing.rows[0].id as string;
-
-  const inserted = await pool.query(
-    `
-    INSERT INTO plant_species (scientific_name, common_name, family_name, genus_name, category, description_short, confidence_source, metadata)
-    VALUES ($1, $2, $3, $4, $5, $6, 'plantnet', $7)
-    RETURNING id
-    `,
+const result = await pool.query(
+    `INSERT INTO plant_species (scientific_name, common_name, family_name, genus_name, category, description_short, confidence_source, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, 'plantnet', $7)
+     ON CONFLICT (scientific_name) DO UPDATE SET updated_at = NOW()
+     RETURNING id`,
     [
       input.scientificName, input.commonName,
       input.familyName || null, input.genusName || null,
@@ -259,7 +252,7 @@ async function findOrCreatePlantSpecies(input: {
       JSON.stringify(input.metadata || { source: "plantnet" }),
     ]
   );
-  return inserted.rows[0].id as string;
+  return result.rows[0].id as string;
 }
 
 async function explainWithGemini(input: {
@@ -384,19 +377,19 @@ export async function POST(request: NextRequest, { params }: Params) {
     }> = [];
 
     if (attachedImages.length > 0) {
-      for (const item of attachedImages) {
-        const buffer = await fetchImageBuffer(item);
-        if (!buffer) continue;
-        const mimeType = item.mime_type || "image/jpeg";
-        const filename = item.media_metadata?.local_filename
-          || `${item.media_asset_id}.jpg`;
-        plantnetFiles.push({
-          filename,
-          mimeType,
-          buffer,
-          organ: mapImageRoleToPlantNetOrgan(item.image_role || "general"),
-        });
-      }
+      const bufferResults = await Promise.all(
+              attachedImages.map(async (item) => {
+                const buffer = await fetchImageBuffer(item);
+                if (!buffer) return null;
+                return {
+                  filename: item.media_metadata?.local_filename || `${item.media_asset_id}.jpg`,
+                  mimeType: item.mime_type || "image/jpeg",
+                  buffer,
+                  organ: mapImageRoleToPlantNetOrgan(item.image_role || "general"),
+                };
+              })
+            );
+            plantnetFiles.push(...bufferResults.filter(Boolean) as typeof plantnetFiles);
     } else {
       // Fallback to scan's primary image
       const fallbackRow: ScanImageRow = {
@@ -611,21 +604,16 @@ export async function POST(request: NextRequest, { params }: Params) {
       ]
     );
 
-    let rank = 2;
-    for (const alt of alternatives) {
-      await pool.query(
-        `
-        INSERT INTO scan_identifications (
+    await Promise.all(alternatives.map((alt, i) =>
+      pool.query(
+        `INSERT INTO scan_identifications (
           scan_id, plant_species_id, rank_order,
           predicted_common_name, predicted_scientific_name, confidence_score,
           is_primary, reasoning_summary, benefits_summary, safety_summary, care_summary, structured_result
-        )
-        VALUES ($1, NULL, $2, $3, $4, $5, FALSE, $6, NULL, NULL, NULL, $7)
-        `,
-        [id, rank, alt.common_name, alt.scientific_name, alt.score, alt.reasoning, JSON.stringify(alt)]
-      );
-      rank++;
-    }
+        ) VALUES ($1, NULL, $2, $3, $4, $5, FALSE, $6, NULL, NULL, NULL, $7)`,
+        [id, i + 2, alt.common_name, alt.scientific_name, alt.score, alt.reasoning, JSON.stringify(alt)]
+      )
+    ));
 
     await pool.query(
       `UPDATE scans SET status = 'completed', completed_at = NOW(),
