@@ -8,7 +8,7 @@ export async function sendOtpEmail(email: string, code: string): Promise<void> {
   }
 
   const { error } = await resend.emails.send({
-    from: "Botaniai <onboarding@resend.dev>",
+    from: "Botaniai <no-reply@soulsyncai.site>",
     to: email,
     subject: "Your Botaniai verification code",
     html: `
